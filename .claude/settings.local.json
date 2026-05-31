@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\.claude\\\\plugins\\\\marketplaces\\\\claude-plugins-official\\\\plugins\\\\code-review\" | Select-Object Name)",
+      "WebFetch(domain:github.com)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\jivp1\\\\Desktop\\\\fleetManager\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "WebFetch(domain:gruporandazzodemo.mstcontrol.com)"
+    ]
+  }
+}

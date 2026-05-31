@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Usuario {
+  id           Int                @id @default(autoincrement())
+  nombre       String
+  email        String             @unique
+  passwordHash String
+  rol          String             @default("operador") // admin | operador | visualizador
+  activo       Boolean            @default(true)
+  ultimoAcceso DateTime?
+  creadoEn     DateTime           @default(now())
+  actividades  RegistroActividad[]
+}
+
+model Vehiculo {
+  id                Int       @id @default(autoincrement())
+  categoria         String    // C | H | K | etc.
+  patente           String    @unique
+  modelo            String
+  marca             String
+  anio              Int
+  estado            String    @default("disponible") // disponible | alquilado | reservado | mantenimiento | proximo_venta
+  ubicacion         String    @default("")
+  kmActuales        Int       @default(0)
+  fechaIncorporacion DateTime @default(now())
+  proximaVenta      Boolean   @default(false)
+  notas             String    @default("")
+  creadoEn          DateTime  @default(now())
+  actualizadoEn     DateTime  @updatedAt
+  reservas          Reserva[]
+  alertas           Alerta[]
+}
+
+model Reserva {
+  id            Int       @id @default(autoincrement())
+  vehiculoId    Int
+  vehiculo      Vehiculo  @relation(fields: [vehiculoId], references: [id])
+  clienteNombre String
+  clienteEmail  String    @default("")
+  clienteTel    String    @default("")
+  fechaInicio   DateTime
+  fechaFin      DateTime
+  estado        String    @default("activa") // activa | finalizada | cancelada
+  notas         String    @default("")
+  creadoEn      DateTime  @default(now())
+  actualizadoEn DateTime  @updatedAt
+}
+
+model Alerta {
+  id          Int       @id @default(autoincrement())
+  vehiculoId  Int?
+  vehiculo    Vehiculo? @relation(fields: [vehiculoId], references: [id])
+  tipo        String    // vencimiento | mantenimiento | devolucion | cambio_estado | otro
+  descripcion String
+  fecha       DateTime  @default(now())
+  leida       Boolean   @default(false)
+  enviada     Boolean   @default(false)
+  creadoEn    DateTime  @default(now())
+}
+
+model ConfigAlerta {
+  id            Int      @id @default(autoincrement())
+  nombre        String
+  tipo          String   // vencimiento | mantenimiento | devolucion | cambio_estado
+  frecuencia    String   // diaria | semanal | inmediata
+  canal         String   @default("email") // email | sistema
+  destinatarios String   // JSON array de emails serializado
+  activa        Boolean  @default(true)
+  creadoEn      DateTime @default(now())
+}
+
+model RegistroActividad {
+  id        Int      @id @default(autoincrement())
+  usuarioId Int?
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id])
+  accion    String
+  detalle   String   @default("")
+  entidad   String   @default("") // Vehiculo | Reserva | Alerta | Usuario
+  entidadId Int?
+  creadoEn  DateTime @default(now())
+}
