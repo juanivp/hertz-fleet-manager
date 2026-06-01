@@ -79,8 +79,10 @@ export interface ConfigAlerta {
   nombre: string
   tipo: string
   frecuencia: string
+  horaEnvio?: string | null
   canal: string
   destinatarios: string
+  mensajePersonalizado?: string | null
   activa: boolean
 }
 

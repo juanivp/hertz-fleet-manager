@@ -39,18 +39,32 @@ router.get('/config', async (_req, res: Response) => {
 })
 
 router.post('/config', async (req: AuthRequest, res: Response) => {
-  const { nombre, tipo, frecuencia, canal, destinatarios, activa } = req.body
+  const { nombre, tipo, frecuencia, horaEnvio, canal, destinatarios, mensajePersonalizado, activa } = req.body
   const c = await prisma.configAlerta.create({
-    data: { nombre, tipo, frecuencia, canal: canal || 'email', destinatarios: JSON.stringify(destinatarios || []), activa: activa !== false },
+    data: {
+      nombre, tipo, frecuencia,
+      horaEnvio: horaEnvio || null,
+      canal: canal || 'email',
+      destinatarios: JSON.stringify(destinatarios || []),
+      mensajePersonalizado: mensajePersonalizado || null,
+      activa: activa !== false,
+    },
   })
   res.status(201).json(c)
 })
 
 router.put('/config/:id', async (req: AuthRequest, res: Response) => {
-  const { nombre, tipo, frecuencia, canal, destinatarios, activa } = req.body
+  const { nombre, tipo, frecuencia, horaEnvio, canal, destinatarios, mensajePersonalizado, activa } = req.body
   const c = await prisma.configAlerta.update({
     where: { id: Number(req.params.id) },
-    data: { nombre, tipo, frecuencia, canal, destinatarios: destinatarios ? JSON.stringify(destinatarios) : undefined, activa },
+    data: {
+      nombre, tipo, frecuencia,
+      horaEnvio: horaEnvio ?? null,
+      canal,
+      destinatarios: destinatarios ? JSON.stringify(destinatarios) : undefined,
+      mensajePersonalizado: mensajePersonalizado ?? null,
+      activa,
+    },
   })
   res.json(c)
 })
