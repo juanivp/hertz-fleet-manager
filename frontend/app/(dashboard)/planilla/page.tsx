@@ -5,19 +5,30 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import api, { Vehiculo, Reserva } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import {
-  format, startOfDay, eachDayOfInterval,
-  parseISO, isWithinInterval, addDays, subDays,
-} from 'date-fns'
+import { format, eachDayOfInterval, parseISO, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 
+// Columns are labeled by their END hour; each slot covers [h-6, h) of that day.
+// h=6 → 00:00-06:00 | h=12 → 06:00-12:00 | h=18 → 12:00-18:00 | h=24 → 18:00-24:00
 const HORAS = [6, 12, 18, 24]
-const COLORES_RESERVA: Record<string, string> = {
-  activa: 'bg-green-500 text-white',
-  finalizada: 'bg-gray-400 text-white',
-  cancelada: 'bg-red-400 text-white',
+
+function slotRange(dia: Date, h: number): [Date, Date] {
+  const start = new Date(dia)
+  start.setHours(h - 6, 0, 0, 0)
+  const end = new Date(dia)
+  // h=24: end is 00:00 of next day
+  if (h === 24) { end.setDate(end.getDate() + 1); end.setHours(0, 0, 0, 0) }
+  else end.setHours(h, 0, 0, 0)
+  return [start, end]
 }
-const COLORES_PREPAGO = 'bg-blue-500 text-white'
+
+function reservaColor(reserva: Reserva, vehiculos: Vehiculo[]): string {
+  if (reserva.estado === 'finalizada') return 'bg-gray-400'
+  if (reserva.estado === 'cancelada') return 'bg-red-400'
+  const vehiculo = vehiculos.find(v => v.id === reserva.vehiculoId)
+  if (vehiculo?.estado === 'reservado') return 'bg-blue-500'
+  return 'bg-green-600'
+}
 
 export default function PlanillaPage() {
   const { usuario } = useAuth()
@@ -31,6 +42,7 @@ export default function PlanillaPage() {
 
   const qc = useQueryClient()
   const dias = eachDayOfInterval({ start: fechaInicio, end: addDays(fechaInicio, 6) })
+  const totalCols = dias.length * HORAS.length
 
   const { data: vehiculos = [], isLoading: loadingV } = useQuery<Vehiculo[]>({
     queryKey: ['vehiculos'],
@@ -52,6 +64,59 @@ export default function PlanillaPage() {
     },
   })
 
+  function reservaEnSlot(vehiculoId: number, dia: Date, h: number): Reserva | undefined {
+    const [s, e] = slotRange(dia, h)
+    return reservas.find(r =>
+      r.vehiculoId === vehiculoId &&
+      parseISO(r.fechaInicio).getTime() < e.getTime() &&
+      parseISO(r.fechaFin).getTime() > s.getTime()
+    )
+  }
+
+  // How many consecutive slots from fromIdx are covered by this reservation
+  function calcColspan(reserva: Reserva, fromIdx: number): number {
+    let count = 0
+    for (let i = fromIdx; i < totalCols; i++) {
+      const [s, e] = slotRange(dias[Math.floor(i / HORAS.length)], HORAS[i % HORAS.length])
+      if (parseISO(reserva.fechaInicio).getTime() < e.getTime() && parseISO(reserva.fechaFin).getTime() > s.getTime()) count++
+      else break
+    }
+    return Math.max(count, 1)
+  }
+
+  function handleDragStart(e: React.DragEvent, reserva: Reserva, fromIdx: number) {
+    setDraggingId(reserva.id)
+    e.dataTransfer.setData('reservaId', reserva.id.toString())
+    e.dataTransfer.setData('origFechaInicio', reserva.fechaInicio)
+    e.dataTransfer.setData('origFechaFin', reserva.fechaFin)
+    e.dataTransfer.setData('fromIdx', fromIdx.toString())
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null)
+    setDragOverCell(null)
+  }
+
+  // Offset-based drop: shift both fechaInicio and fechaFin by the same number of slots.
+  // This preserves the visual block width regardless of whether the reservation
+  // starts before the visible range.
+  function handleDrop(e: React.DragEvent, vehiculoId: number, toIdx: number) {
+    e.preventDefault()
+    setDragOverCell(null)
+    setDraggingId(null)
+    const reservaId = parseInt(e.dataTransfer.getData('reservaId'))
+    const origStart = e.dataTransfer.getData('origFechaInicio')
+    const origEnd = e.dataTransfer.getData('origFechaFin')
+    const fromIdx = parseInt(e.dataTransfer.getData('fromIdx'))
+    if (!reservaId || !origStart || !origEnd || isNaN(fromIdx)) return
+    const SLOT_MS = 6 * 60 * 60 * 1000
+    const offsetMs = (toIdx - fromIdx) * SLOT_MS
+    const newFechaInicio = new Date(parseISO(origStart).getTime() + offsetMs)
+    const newFechaFin = new Date(parseISO(origEnd).getTime() + offsetMs)
+    moverReserva.mutate({ reservaId, vehiculoId, fechaInicio: newFechaInicio.toISOString(), fechaFin: newFechaFin.toISOString() })
+  }
+
   const categorias = catFilter === 'todos'
     ? [...new Set(vehiculos.map(v => v.categoria))].sort()
     : [catFilter]
@@ -61,58 +126,6 @@ export default function PlanillaPage() {
     const matchSearch = !search || v.patente.toLowerCase().includes(search.toLowerCase()) || v.modelo.toLowerCase().includes(search.toLowerCase())
     return matchCat && matchSearch
   })
-
-  function getReservaDia(vehiculoId: number, dia: Date): Reserva | undefined {
-    return reservas.find(r =>
-      r.vehiculoId === vehiculoId &&
-      isWithinInterval(startOfDay(dia), { start: parseISO(r.fechaInicio), end: parseISO(r.fechaFin) })
-    )
-  }
-
-  function handleDragStart(e: React.DragEvent, reserva: Reserva) {
-    setDraggingId(reserva.id)
-    e.dataTransfer.setData('reservaId', reserva.id.toString())
-    e.dataTransfer.setData('origFechaInicio', reserva.fechaInicio)
-    e.dataTransfer.setData('origFechaFin', reserva.fechaFin)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-
-  function handleDragEnd() {
-    setDraggingId(null)
-    setDragOverCell(null)
-  }
-
-  function handleDragOver(e: React.DragEvent, cellKey: string) {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (dragOverCell !== cellKey) setDragOverCell(cellKey)
-  }
-
-  function handleDrop(e: React.DragEvent, vehiculoId: number, dia: Date, h: number) {
-    e.preventDefault()
-    setDragOverCell(null)
-    setDraggingId(null)
-
-    const reservaId = parseInt(e.dataTransfer.getData('reservaId'))
-    const origStart = e.dataTransfer.getData('origFechaInicio')
-    const origEnd = e.dataTransfer.getData('origFechaFin')
-    if (!reservaId || !origStart || !origEnd) return
-
-    const duration = parseISO(origEnd).getTime() - parseISO(origStart).getTime()
-
-    const newStart = new Date(dia)
-    // h=24 means midnight of the next day
-    newStart.setHours(h === 24 ? 0 : h, 0, 0, 0)
-    if (h === 24) newStart.setDate(newStart.getDate() + 1)
-    const newEnd = new Date(newStart.getTime() + duration)
-
-    moverReserva.mutate({
-      reservaId,
-      vehiculoId,
-      fechaInicio: newStart.toISOString(),
-      fechaFin: newEnd.toISOString(),
-    })
-  }
 
   const loading = loadingV || loadingR
 
@@ -182,43 +195,24 @@ export default function PlanillaPage() {
 
       {/* Navigation */}
       <div className="mb-3 flex gap-2">
-        <button
-          onClick={() => setFechaInicio(d => subDays(d, 7))}
-          className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          ← Anterior
-        </button>
-        <button
-          onClick={() => setFechaInicio(subDays(new Date(), 1))}
-          className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Hoy
-        </button>
-        <button
-          onClick={() => setFechaInicio(d => addDays(d, 7))}
-          className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Siguiente →
-        </button>
+        <button onClick={() => setFechaInicio(d => subDays(d, 7))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">← Anterior</button>
+        <button onClick={() => setFechaInicio(subDays(new Date(), 1))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Hoy</button>
+        <button onClick={() => setFechaInicio(d => addDays(d, 7))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Siguiente →</button>
       </div>
 
       {loading ? (
         <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-blue-500" /></div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
-          <table className="w-full border-collapse text-xs" style={{ minWidth: `${240 + dias.length * HORAS.length * 36}px` }}>
+          <table className="w-full border-collapse text-xs" style={{ minWidth: `${240 + totalCols * 36}px` }}>
             <thead>
               <tr>
                 <th className="sticky left-0 z-10 w-52 bg-black text-white border-b border-gray-700 px-4 py-2 text-left text-sm font-semibold">
                   Vehículo
                 </th>
                 {dias.map(dia => (
-                  <th
-                    key={dia.toISOString()}
-                    colSpan={HORAS.length}
-                    className="border-b border-r border-gray-200 px-2 py-2 text-center font-semibold text-gray-700 bg-gray-50"
-                  >
-                    {format(dia, "EEE dd/MM", { locale: es })}
+                  <th key={dia.toISOString()} colSpan={HORAS.length} className="border-b border-r border-gray-200 px-2 py-2 text-center font-semibold text-gray-700 bg-gray-50">
+                    {format(dia, 'EEE dd/MM', { locale: es })}
                   </th>
                 ))}
               </tr>
@@ -240,57 +234,61 @@ export default function PlanillaPage() {
                 return (
                   <>
                     <tr key={`cat-${cat}`}>
-                      <td
-                        colSpan={dias.length * HORAS.length + 1}
-                        className="sticky left-0 bg-teal-700 px-4 py-1.5 text-xs font-bold text-white uppercase tracking-wider"
-                      >
+                      <td colSpan={totalCols + 1} className="sticky left-0 bg-teal-700 px-4 py-1.5 text-xs font-bold text-white uppercase tracking-wider">
                         Categoría {cat}
                       </td>
                     </tr>
-                    {vehiculosCat.map(v => (
-                      <tr key={v.id} className="hover:bg-gray-50">
-                        <td className="sticky left-0 z-10 bg-white border-b border-r border-gray-100 px-4 py-2 min-w-[13rem]">
-                          <div className="font-mono font-bold text-gray-900 text-xs">{v.patente}</div>
-                          <div className="text-gray-400 text-xs">{v.modelo}</div>
-                        </td>
-                        {dias.flatMap(dia =>
-                          HORAS.map(h => {
-                            const reservaDia = getReservaDia(v.id, dia)
-                            const colorClass = reservaDia
-                              ? (reservaDia.clienteNombre.toLowerCase().includes('prepago') ? COLORES_PREPAGO : COLORES_RESERVA[reservaDia.estado] || 'bg-green-500 text-white')
-                              : ''
-                            const cellKey = `${v.id}-${dia.toISOString()}-${h}`
-                            const isOver = dragOverCell === cellKey
-                            const isDraggingThis = draggingId === reservaDia?.id
+                    {vehiculosCat.map(v => {
+                      const cells: React.ReactNode[] = []
+                      let i = 0
+                      while (i < totalCols) {
+                        const dia = dias[Math.floor(i / HORAS.length)]
+                        const h = HORAS[i % HORAS.length]
+                        const reserva = reservaEnSlot(v.id, dia, h)
 
-                            return (
-                              <td
-                                key={cellKey}
-                                className={`border-b border-r border-gray-100 p-0 w-9 h-8 transition-colors ${isOver ? 'bg-amber-100 ring-1 ring-inset ring-amber-400' : ''}`}
-                                onDragOver={canDrag ? (e) => handleDragOver(e, cellKey) : undefined}
-                                onDrop={canDrag ? (e) => handleDrop(e, v.id, dia, h) : undefined}
+                        if (reserva) {
+                          const span = calcColspan(reserva, i)
+                          const isDragging = draggingId === reserva.id
+                          const color = reservaColor(reserva, vehiculos)
+                          cells.push(
+                            <td key={`${v.id}-r${reserva.id}-${i}`} colSpan={span} className="border-b border-r border-gray-100 p-0.5 h-8">
+                              <div
+                                draggable={canDrag}
+                                onDragStart={canDrag ? e => handleDragStart(e, reserva, i) : undefined}
+                                onDragEnd={canDrag ? handleDragEnd : undefined}
+                                className={`h-full flex items-center px-2 text-xs font-semibold text-white rounded truncate select-none ${color} ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-40' : ''}`}
+                                title={`${reserva.clienteNombre} - #${reserva.id}`}
                               >
-                                {reservaDia && h === HORAS[0] ? (
-                                  <div
-                                    draggable={canDrag}
-                                    onDragStart={canDrag ? (e) => handleDragStart(e, reservaDia) : undefined}
-                                    onDragEnd={canDrag ? handleDragEnd : undefined}
-                                    className={`h-8 flex items-center px-1 text-xs font-medium truncate select-none ${colorClass} ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${isDraggingThis ? 'opacity-40' : ''}`}
-                                    title={reservaDia.clienteNombre}
-                                  >
-                                    {reservaDia.clienteNombre.substring(0, 12)}
-                                  </div>
-                                ) : reservaDia ? (
-                                  <div className={`h-8 ${colorClass} ${isDraggingThis ? 'opacity-40' : 'opacity-80'}`} />
-                                ) : (
-                                  <div className="h-8" />
-                                )}
-                              </td>
-                            )
-                          })
-                        )}
-                      </tr>
-                    ))}
+                                {reserva.clienteNombre} - #{reserva.id}
+                              </div>
+                            </td>
+                          )
+                          i += span
+                        } else {
+                          const cellKey = `${v.id}-e${i}`
+                          const isOver = dragOverCell === cellKey
+                          cells.push(
+                            <td
+                              key={cellKey}
+                              className={`border-b border-r border-gray-100 p-0 w-9 h-8 ${isOver ? 'bg-amber-100 ring-1 ring-inset ring-amber-400' : ''}`}
+                              onDragOver={canDrag ? e => { e.preventDefault(); if (dragOverCell !== cellKey) setDragOverCell(cellKey) } : undefined}
+                              onDrop={canDrag ? e => handleDrop(e, v.id, i) : undefined}
+                            />
+                          )
+                          i++
+                        }
+                      }
+
+                      return (
+                        <tr key={v.id} className="hover:bg-gray-50">
+                          <td className="sticky left-0 z-10 bg-white border-b border-r border-gray-100 px-4 py-2 min-w-[13rem]">
+                            <div className="font-mono font-bold text-gray-900 text-xs">{v.patente}</div>
+                            <div className="text-gray-400 text-xs">{v.modelo}</div>
+                          </td>
+                          {cells}
+                        </tr>
+                      )
+                    })}
                   </>
                 )
               })}
@@ -302,23 +300,11 @@ export default function PlanillaPage() {
       {/* Legend */}
       {!loading && (
         <div className="mt-3 flex items-center justify-center gap-6 text-sm text-gray-600">
-          <span className="flex items-center gap-2">
-            <span className="h-4 w-4 rounded bg-green-500" /> Alquilado
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="h-4 w-4 rounded bg-blue-500" /> Reservado
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="h-4 w-4 rounded border border-gray-300 bg-white" /> Disponible
-          </span>
-          <span className="flex items-center gap-2">
-            <span className="h-4 w-4 rounded bg-amber-100 border border-amber-300" /> Feriado
-          </span>
-          {canDrag && (
-            <span className="text-gray-400 text-xs italic">
-              Arrastrá un cliente para mover su reserva
-            </span>
-          )}
+          <span className="flex items-center gap-2"><span className="h-4 w-4 rounded bg-green-600" /> Alquilado</span>
+          <span className="flex items-center gap-2"><span className="h-4 w-4 rounded bg-blue-500" /> Reservado</span>
+          <span className="flex items-center gap-2"><span className="h-4 w-4 rounded border border-gray-300 bg-white" /> Disponible</span>
+          <span className="flex items-center gap-2"><span className="h-4 w-4 rounded bg-amber-100 border border-amber-300" /> Feriado</span>
+          {canDrag && <span className="text-gray-400 text-xs italic">Arrastrá un cliente para mover su reserva</span>}
         </div>
       )}
     </div>
