@@ -1,11 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import api, { Vehiculo, Reserva } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import {
-  format, startOfDay, endOfDay, eachDayOfInterval,
+  format, startOfDay, eachDayOfInterval,
   parseISO, isWithinInterval, addDays, subDays,
 } from 'date-fns'
 import { es } from 'date-fns/locale'
@@ -19,10 +20,16 @@ const COLORES_RESERVA: Record<string, string> = {
 const COLORES_PREPAGO = 'bg-blue-500 text-white'
 
 export default function PlanillaPage() {
+  const { usuario } = useAuth()
+  const canDrag = usuario?.rol === 'admin' || usuario?.rol === 'operador'
+
   const [fechaInicio, setFechaInicio] = useState(() => subDays(new Date(), 1))
   const [catFilter, setCatFilter] = useState('todos')
   const [search, setSearch] = useState('')
+  const [dragOverCell, setDragOverCell] = useState<string | null>(null)
+  const [draggingId, setDraggingId] = useState<number | null>(null)
 
+  const qc = useQueryClient()
   const dias = eachDayOfInterval({ start: fechaInicio, end: addDays(fechaInicio, 6) })
 
   const { data: vehiculos = [], isLoading: loadingV } = useQuery<Vehiculo[]>({
@@ -32,6 +39,17 @@ export default function PlanillaPage() {
   const { data: reservas = [], isLoading: loadingR } = useQuery<Reserva[]>({
     queryKey: ['reservas-planilla'],
     queryFn: () => api.get('/reservas').then(r => r.data),
+  })
+
+  const moverReserva = useMutation({
+    mutationFn: ({ reservaId, vehiculoId, fechaInicio, fechaFin }: {
+      reservaId: number; vehiculoId: number; fechaInicio: string; fechaFin: string
+    }) => api.put(`/reservas/${reservaId}`, { vehiculoId, fechaInicio, fechaFin }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['reservas-planilla'] })
+      qc.invalidateQueries({ queryKey: ['vehiculos'] })
+      qc.invalidateQueries({ queryKey: ['stats'] })
+    },
   })
 
   const categorias = catFilter === 'todos'
@@ -44,22 +62,56 @@ export default function PlanillaPage() {
     return matchCat && matchSearch
   })
 
-  function getReservaEnHora(vehiculoId: number, dia: Date, hora: number): Reserva | undefined {
-    const horaInicio = new Date(dia)
-    horaInicio.setHours(hora - 6, 0, 0, 0)
-    const horaFin = new Date(dia)
-    horaFin.setHours(hora, 0, 0, 0)
-    return reservas.find(r =>
-      r.vehiculoId === vehiculoId &&
-      isWithinInterval(horaInicio, { start: parseISO(r.fechaInicio), end: parseISO(r.fechaFin) })
-    )
-  }
-
   function getReservaDia(vehiculoId: number, dia: Date): Reserva | undefined {
     return reservas.find(r =>
       r.vehiculoId === vehiculoId &&
       isWithinInterval(startOfDay(dia), { start: parseISO(r.fechaInicio), end: parseISO(r.fechaFin) })
     )
+  }
+
+  function handleDragStart(e: React.DragEvent, reserva: Reserva) {
+    setDraggingId(reserva.id)
+    e.dataTransfer.setData('reservaId', reserva.id.toString())
+    e.dataTransfer.setData('origFechaInicio', reserva.fechaInicio)
+    e.dataTransfer.setData('origFechaFin', reserva.fechaFin)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleDragEnd() {
+    setDraggingId(null)
+    setDragOverCell(null)
+  }
+
+  function handleDragOver(e: React.DragEvent, cellKey: string) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverCell !== cellKey) setDragOverCell(cellKey)
+  }
+
+  function handleDrop(e: React.DragEvent, vehiculoId: number, dia: Date, h: number) {
+    e.preventDefault()
+    setDragOverCell(null)
+    setDraggingId(null)
+
+    const reservaId = parseInt(e.dataTransfer.getData('reservaId'))
+    const origStart = e.dataTransfer.getData('origFechaInicio')
+    const origEnd = e.dataTransfer.getData('origFechaFin')
+    if (!reservaId || !origStart || !origEnd) return
+
+    const duration = parseISO(origEnd).getTime() - parseISO(origStart).getTime()
+
+    const newStart = new Date(dia)
+    // h=24 means midnight of the next day
+    newStart.setHours(h === 24 ? 0 : h, 0, 0, 0)
+    if (h === 24) newStart.setDate(newStart.getDate() + 1)
+    const newEnd = new Date(newStart.getTime() + duration)
+
+    moverReserva.mutate({
+      reservaId,
+      vehiculoId,
+      fechaInicio: newStart.toISOString(),
+      fechaFin: newEnd.toISOString(),
+    })
   }
 
   const loading = loadingV || loadingR
@@ -203,22 +255,33 @@ export default function PlanillaPage() {
                         </td>
                         {dias.flatMap(dia =>
                           HORAS.map(h => {
-                            const reserva = getReservaEnHora(v.id, dia, h)
                             const reservaDia = getReservaDia(v.id, dia)
                             const colorClass = reservaDia
                               ? (reservaDia.clienteNombre.toLowerCase().includes('prepago') ? COLORES_PREPAGO : COLORES_RESERVA[reservaDia.estado] || 'bg-green-500 text-white')
                               : ''
+                            const cellKey = `${v.id}-${dia.toISOString()}-${h}`
+                            const isOver = dragOverCell === cellKey
+                            const isDraggingThis = draggingId === reservaDia?.id
+
                             return (
-                              <td key={`${dia.toISOString()}-${h}`} className="border-b border-r border-gray-100 p-0 w-9 h-8">
+                              <td
+                                key={cellKey}
+                                className={`border-b border-r border-gray-100 p-0 w-9 h-8 transition-colors ${isOver ? 'bg-amber-100 ring-1 ring-inset ring-amber-400' : ''}`}
+                                onDragOver={canDrag ? (e) => handleDragOver(e, cellKey) : undefined}
+                                onDrop={canDrag ? (e) => handleDrop(e, v.id, dia, h) : undefined}
+                              >
                                 {reservaDia && h === HORAS[0] ? (
                                   <div
-                                    className={`h-8 flex items-center px-1 text-xs font-medium truncate ${colorClass}`}
-                                    title={`${reservaDia.clienteNombre}`}
+                                    draggable={canDrag}
+                                    onDragStart={canDrag ? (e) => handleDragStart(e, reservaDia) : undefined}
+                                    onDragEnd={canDrag ? handleDragEnd : undefined}
+                                    className={`h-8 flex items-center px-1 text-xs font-medium truncate select-none ${colorClass} ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${isDraggingThis ? 'opacity-40' : ''}`}
+                                    title={reservaDia.clienteNombre}
                                   >
                                     {reservaDia.clienteNombre.substring(0, 12)}
                                   </div>
                                 ) : reservaDia ? (
-                                  <div className={`h-8 ${colorClass} opacity-80`} />
+                                  <div className={`h-8 ${colorClass} ${isDraggingThis ? 'opacity-40' : 'opacity-80'}`} />
                                 ) : (
                                   <div className="h-8" />
                                 )}
@@ -251,6 +314,11 @@ export default function PlanillaPage() {
           <span className="flex items-center gap-2">
             <span className="h-4 w-4 rounded bg-amber-100 border border-amber-300" /> Feriado
           </span>
+          {canDrag && (
+            <span className="text-gray-400 text-xs italic">
+              Arrastrá un cliente para mover su reserva
+            </span>
+          )}
         </div>
       )}
     </div>
