@@ -11,7 +11,11 @@ import reportesRouter from './routes/reportes'
 const app = express()
 const PORT = process.env.PORT || 3001
 
-app.use(cors({ origin: 'http://localhost:3000', credentials: true }))
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000').split(',').map(s => s.trim())
+app.use(cors({
+  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error('CORS'))),
+  credentials: true,
+}))
 app.use(express.json())
 
 app.use('/api/auth', authRouter)
