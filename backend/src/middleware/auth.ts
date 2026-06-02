@@ -18,12 +18,14 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
   const { data: { user }, error } = await supabaseAdmin.auth.getUser(token)
 
   if (error || !user) {
-    res.status(401).json({ error: 'Token inválido' })
+    console.error('[auth] getUser failed:', error?.message)
+    res.status(401).json({ error: 'Token inválido', detail: error?.message })
     return
   }
 
   const usuario = await prisma.usuario.findUnique({ where: { authId: user.id } })
   if (!usuario || !usuario.activo) {
+    console.error('[auth] usuario no encontrado para authId:', user.id)
     res.status(401).json({ error: 'Usuario no autorizado' })
     return
   }
