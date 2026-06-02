@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from './supabase'
+import { tokenStore } from './tokenStore'
 import api from './api'
 
 interface UsuarioAuth {
@@ -29,20 +30,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.access_token) {
+        tokenStore.set(session.access_token)
         try {
-          const { data } = await api.get('/auth/me', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          })
+          const { data } = await api.get('/auth/me')
           setUsuario(data)
         } catch {
+          tokenStore.set(null)
           setUsuario(null)
         }
       }
       setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') setUsuario(null)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        tokenStore.set(null)
+        setUsuario(null)
+      }
+      if (event === 'TOKEN_REFRESHED' && session?.access_token) {
+        tokenStore.set(session.access_token)
+      }
     })
 
     return () => subscription.unsubscribe()
@@ -50,19 +57,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function login(email: string, password: string) {
     const { data: authData, error } = await supabase.auth.signInWithPassword({ email, password })
-    console.log('[login] error:', error?.message ?? null)
-    console.log('[login] session:', authData.session ? 'present' : 'null')
-    console.log('[login] token prefix:', authData.session?.access_token?.slice(0, 30) ?? 'none')
     if (error) throw error
-    const { data } = await api.get('/auth/me', {
-      headers: { Authorization: `Bearer ${authData.session!.access_token}` },
-    })
+    tokenStore.set(authData.session!.access_token)
+    const { data } = await api.get('/auth/me')
     setUsuario(data)
     router.push('/dashboard')
   }
 
   async function logout() {
     await supabase.auth.signOut()
+    tokenStore.set(null)
     setUsuario(null)
     router.push('/login')
   }

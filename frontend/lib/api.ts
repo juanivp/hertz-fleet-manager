@@ -1,23 +1,19 @@
 import axios from 'axios'
-import { supabase } from './supabase'
+import { tokenStore } from './tokenStore'
 
 const api = axios.create({ baseURL: process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api' })
 
-api.interceptors.request.use(async (config) => {
-  if (typeof window !== 'undefined') {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (session?.access_token) {
-      config.headers.Authorization = `Bearer ${session.access_token}`
-    }
-  }
+api.interceptors.request.use((config) => {
+  const token = tokenStore.get()
+  if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 
 api.interceptors.response.use(
   (r) => r,
-  async (err) => {
+  (err) => {
     if (err.response?.status === 401 && typeof window !== 'undefined') {
-      await supabase.auth.signOut()
+      tokenStore.set(null)
       window.location.href = '/login'
     }
     return Promise.reject(err)
