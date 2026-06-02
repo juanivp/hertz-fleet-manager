@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
-import { supabaseAdmin } from '../lib/supabase'
+import jwt from 'jsonwebtoken'
 import { prisma } from '../lib/prisma'
 
 export interface AuthRequest extends Request {
@@ -15,17 +15,17 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
   }
 
   const token = header.slice(7)
-  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token)
+  let payload: { sub: string }
 
-  if (error || !user) {
-    console.error('[auth] getUser failed:', error?.message)
-    res.status(401).json({ error: 'Token inválido', detail: error?.message })
+  try {
+    payload = jwt.verify(token, process.env.SUPABASE_JWT_SECRET!) as { sub: string }
+  } catch (err) {
+    res.status(401).json({ error: 'Token inválido' })
     return
   }
 
-  const usuario = await prisma.usuario.findUnique({ where: { authId: user.id } })
+  const usuario = await prisma.usuario.findUnique({ where: { authId: payload.sub } })
   if (!usuario || !usuario.activo) {
-    console.error('[auth] usuario no encontrado para authId:', user.id)
     res.status(401).json({ error: 'Usuario no autorizado' })
     return
   }
@@ -43,5 +43,4 @@ export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction
   next()
 }
 
-// kept for backwards compatibility with imports
 export const JWT_SECRET = ''
