@@ -5,7 +5,21 @@
       "WebFetch(domain:github.com)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\jivp1\\\\Desktop\\\\fleetManager\" -Recurse -Force)",
       "Bash(Select-Object FullName)",
-      "WebFetch(domain:gruporandazzodemo.mstcontrol.com)"
+      "WebFetch(domain:gruporandazzodemo.mstcontrol.com)",
+      "Bash(git fetch *)",
+      "Bash(git push *)",
+      "Bash(curl -s http://localhost:3001/api/vehiculos/stats)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(npx playwright *)",
+      "Bash(npm install *)",
+      "Bash(node verify-drag.mjs)",
+      "Bash(node verify-drag2.mjs)",
+      "Bash(npx next *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git checkout *)",
+      "Bash(git commit *)",
+      "Bash(git merge *)"
     ]
   }
 }
