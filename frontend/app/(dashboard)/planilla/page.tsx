@@ -7,6 +7,8 @@ import api, { Vehiculo, Reserva } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { format, eachDayOfInterval, parseISO, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { EstadoBadge } from '@/components/ui/badge'
 
 // Columns are labeled by their END hour; each slot covers [h-6, h) of that day.
 // h=6 → 00:00-06:00 | h=12 → 06:00-12:00 | h=18 → 12:00-18:00 | h=24 → 18:00-24:00
@@ -39,6 +41,8 @@ export default function PlanillaPage() {
   const [search, setSearch] = useState('')
   const [dragOverCell, setDragOverCell] = useState<string | null>(null)
   const [draggingId, setDraggingId] = useState<number | null>(null)
+  const [selectedReserva, setSelectedReserva] = useState<Reserva | null>(null)
+  const [editedNotas, setEditedNotas] = useState('')
 
   const qc = useQueryClient()
   const dias = eachDayOfInterval({ start: fechaInicio, end: addDays(fechaInicio, 6) })
@@ -51,6 +55,15 @@ export default function PlanillaPage() {
   const { data: reservas = [], isLoading: loadingR } = useQuery<Reserva[]>({
     queryKey: ['reservas-planilla'],
     queryFn: () => api.get('/reservas').then(r => r.data),
+  })
+
+  const saveNotas = useMutation({
+    mutationFn: ({ id, notas }: { id: number; notas: string }) =>
+      api.put(`/reservas/${id}`, { notas }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['reservas-planilla'] })
+      setSelectedReserva(null)
+    },
   })
 
   const moverReserva = useMutation({
@@ -195,9 +208,9 @@ export default function PlanillaPage() {
 
       {/* Navigation */}
       <div className="mb-3 flex gap-2">
-        <button onClick={() => setFechaInicio(d => subDays(d, 7))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">← Anterior</button>
-        <button onClick={() => setFechaInicio(subDays(new Date(), 1))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Hoy</button>
-        <button onClick={() => setFechaInicio(d => addDays(d, 7))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Siguiente →</button>
+        <button disabled={!!draggingId} onClick={() => setFechaInicio(d => subDays(d, 7))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">← Anterior</button>
+        <button disabled={!!draggingId} onClick={() => setFechaInicio(subDays(new Date(), 1))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Hoy</button>
+        <button disabled={!!draggingId} onClick={() => setFechaInicio(d => addDays(d, 7))} className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Siguiente →</button>
       </div>
 
       {loading ? (
@@ -253,10 +266,11 @@ export default function PlanillaPage() {
                           cells.push(
                             <td key={`${v.id}-r${reserva.id}-${i}`} colSpan={span} className="border-b border-r border-gray-100 p-0.5 h-8">
                               <div
-                                draggable={canDrag}
-                                onDragStart={canDrag ? e => handleDragStart(e, reserva, i) : undefined}
-                                onDragEnd={canDrag ? handleDragEnd : undefined}
-                                className={`h-full flex items-center px-2 text-xs font-semibold text-white rounded truncate select-none ${color} ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'opacity-40' : ''}`}
+                                draggable={canDrag && reserva.estado === 'activa'}
+                                onDragStart={canDrag && reserva.estado === 'activa' ? e => handleDragStart(e, reserva, i) : undefined}
+                                onDragEnd={canDrag && reserva.estado === 'activa' ? handleDragEnd : undefined}
+                                onClick={() => { setSelectedReserva(reserva); setEditedNotas(reserva.notas || '') }}
+                                className={`h-full flex items-center px-2 text-xs font-semibold text-white rounded truncate select-none ${color} ${canDrag && reserva.estado === 'activa' ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${isDragging ? 'opacity-40' : ''}`}
                                 title={`${reserva.clienteNombre} - #${reserva.id}`}
                               >
                                 {reserva.clienteNombre} - #{reserva.id}
@@ -296,6 +310,86 @@ export default function PlanillaPage() {
           </table>
         </div>
       )}
+
+      {/* Reservation detail modal */}
+      <Dialog open={!!selectedReserva} onOpenChange={open => !open && setSelectedReserva(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Detalles de la Reserva</DialogTitle>
+          </DialogHeader>
+          {selectedReserva && (() => {
+            const vehiculo = vehiculos.find(v => v.id === selectedReserva.vehiculoId)
+            return (
+              <div className="space-y-5 pt-1">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Vehículo</p>
+                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-800">
+                      {selectedReserva.vehiculo?.patente ?? vehiculo?.patente ?? '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Cliente</p>
+                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-800">
+                      {selectedReserva.clienteNombre}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Número de Contrato</p>
+                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 font-mono text-sm text-gray-800">
+                      #{String(selectedReserva.id).padStart(5, '0')}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Fecha/Hora Inicio</p>
+                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-800">
+                      {format(parseISO(selectedReserva.fechaInicio), 'dd/MM/yy HH:mm')}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Fecha/Hora Fin</p>
+                    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-800">
+                      {format(parseISO(selectedReserva.fechaFin), 'dd/MM/yy HH:mm')}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-gray-500">Estado</p>
+                    <div className="flex min-h-[38px] items-center rounded-md border border-gray-200 bg-white px-3 py-2">
+                      <EstadoBadge estado={vehiculo?.estado ?? selectedReserva.estado} />
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-sm font-semibold text-gray-800">Observaciones</p>
+                  <textarea
+                    value={editedNotas}
+                    onChange={e => setEditedNotas(e.target.value)}
+                    placeholder="Agregar notas..."
+                    className="min-h-[80px] w-full resize-y rounded-md border border-gray-200 px-3 py-2.5 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  />
+                </div>
+                {saveNotas.isError && <p className="text-sm text-red-600">Error al guardar</p>}
+                <div className="flex justify-end gap-3 pt-1">
+                  <button
+                    onClick={() => setSelectedReserva(null)}
+                    className="rounded-md border border-gray-200 px-6 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    Cerrar
+                  </button>
+                  <button
+                    onClick={() => saveNotas.mutate({ id: selectedReserva.id, notas: editedNotas })}
+                    disabled={saveNotas.isPending}
+                    className="flex items-center gap-2 rounded-md bg-black px-6 py-2 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:opacity-50"
+                  >
+                    {saveNotas.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Guardar Cambios
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Legend */}
       {!loading && (

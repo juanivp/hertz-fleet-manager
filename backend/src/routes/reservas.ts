@@ -58,8 +58,8 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     include: { vehiculo: true },
   })
 
-  // When the vehicle changes, update estado of both vehicles
-  if (newVehiculoId !== prev.vehiculoId) {
+  // When the vehicle changes, update estado of both vehicles (only if reservation is active)
+  if (newVehiculoId !== prev.vehiculoId && prev.estado === 'activa') {
     const otraActivaOld = await prisma.reserva.findFirst({ where: { vehiculoId: prev.vehiculoId, estado: 'activa', id: { not: id } } })
     if (!otraActivaOld) {
       await prisma.vehiculo.update({ where: { id: prev.vehiculoId }, data: { estado: 'disponible' } })
