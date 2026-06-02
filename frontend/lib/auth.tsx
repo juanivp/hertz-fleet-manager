@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
+import { supabase } from './supabase'
 import api from './api'
 
 interface UsuarioAuth {
@@ -15,7 +16,7 @@ interface AuthCtx {
   usuario: UsuarioAuth | null
   loading: boolean
   login: (email: string, password: string) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthCtx | null>(null)
@@ -26,25 +27,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter()
 
   useEffect(() => {
-    const stored = localStorage.getItem('usuario')
-    const token = localStorage.getItem('token')
-    if (stored && token) {
-      setUsuario(JSON.parse(stored))
-    }
-    setLoading(false)
+    // Restore session on mount
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session) {
+        try {
+          const { data } = await api.get('/auth/me')
+          setUsuario(data)
+        } catch {
+          setUsuario(null)
+        }
+      }
+      setLoading(false)
+    })
+
+    // Keep in sync with Supabase auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') setUsuario(null)
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
   async function login(email: string, password: string) {
-    const { data } = await api.post('/auth/login', { email, password })
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('usuario', JSON.stringify(data.usuario))
-    setUsuario(data.usuario)
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) throw error
+    const { data } = await api.get('/auth/me')
+    setUsuario(data)
     router.push('/dashboard')
   }
 
-  function logout() {
-    localStorage.removeItem('token')
-    localStorage.removeItem('usuario')
+  async function logout() {
+    await supabase.auth.signOut()
     setUsuario(null)
     router.push('/login')
   }

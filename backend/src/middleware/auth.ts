@@ -1,27 +1,36 @@
 import { Request, Response, NextFunction } from 'express'
-import jwt from 'jsonwebtoken'
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fleet-manager-secret-dev'
+import { supabaseAdmin } from '../lib/supabase'
+import { prisma } from '../lib/prisma'
 
 export interface AuthRequest extends Request {
   userId?: number
   userRol?: string
 }
 
-export function authenticate(req: AuthRequest, res: Response, next: NextFunction): void {
+export async function authenticate(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization
   if (!header?.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Token requerido' })
     return
   }
-  try {
-    const payload = jwt.verify(header.slice(7), JWT_SECRET) as { id: number; rol: string }
-    req.userId = payload.id
-    req.userRol = payload.rol
-    next()
-  } catch {
+
+  const token = header.slice(7)
+  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token)
+
+  if (error || !user) {
     res.status(401).json({ error: 'Token inválido' })
+    return
   }
+
+  const usuario = await prisma.usuario.findUnique({ where: { authId: user.id } })
+  if (!usuario || !usuario.activo) {
+    res.status(401).json({ error: 'Usuario no autorizado' })
+    return
+  }
+
+  req.userId = usuario.id
+  req.userRol = usuario.rol
+  next()
 }
 
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {
@@ -32,4 +41,5 @@ export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction
   next()
 }
 
-export { JWT_SECRET }
+// kept for backwards compatibility with imports
+export const JWT_SECRET = ''
