@@ -1,9 +1,34 @@
 import { PrismaClient } from '@prisma/client'
-import bcrypt from 'bcryptjs'
+import { createClient } from '@supabase/supabase-js'
+import ws from 'ws'
 
 const prisma = new PrismaClient()
 
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { autoRefreshToken: false, persistSession: false }, realtime: { transport: ws } }
+)
+
+async function getOrCreateAuthUser(email: string, password: string, nombre: string): Promise<string> {
+  // Try to create; if already exists, find by listing users
+  const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { nombre },
+  })
+  if (created?.user) return created.user.id
+
+  // User already exists — find by email
+  const { data: { users } } = await supabaseAdmin.auth.admin.listUsers()
+  const existing = users.find(u => u.email === email)
+  if (existing) return existing.id
+  throw new Error(`Could not create or find Supabase user: ${email} — ${error?.message}`)
+}
+
 async function main() {
+  // Clear existing data
   await prisma.registroActividad.deleteMany()
   await prisma.alerta.deleteMany()
   await prisma.reserva.deleteMany()
@@ -11,27 +36,30 @@ async function main() {
   await prisma.configAlerta.deleteMany()
   await prisma.usuario.deleteMany()
 
-  const adminHash = await bcrypt.hash('admin123', 10)
-  const opHash = await bcrypt.hash('oper123', 10)
+  // Create Supabase Auth users + Usuario records
+  const adminAuthId  = await getOrCreateAuthUser('admin@flota.com',  'admin123', 'Admin Usuario')
+  const op1AuthId    = await getOrCreateAuthUser('carlos@flota.com', 'oper123',  'Carlos Mendez')
+  const op2AuthId    = await getOrCreateAuthUser('laura@flota.com',  'oper123',  'Laura Gomez')
+  const viewAuthId   = await getOrCreateAuthUser('juan@flota.com',   'oper123',  'Juan Perez')
 
   const admin = await prisma.usuario.create({
-    data: { nombre: 'Admin Usuario', email: 'admin@flota.com', passwordHash: adminHash, rol: 'admin', ultimoAcceso: new Date() },
+    data: { authId: adminAuthId, nombre: 'Admin Usuario', email: 'admin@flota.com', rol: 'admin', ultimoAcceso: new Date() },
   })
   const op1 = await prisma.usuario.create({
-    data: { nombre: 'Carlos Mendez', email: 'carlos@flota.com', passwordHash: opHash, rol: 'operador', ultimoAcceso: new Date(Date.now() - 3600000) },
+    data: { authId: op1AuthId, nombre: 'Carlos Mendez', email: 'carlos@flota.com', rol: 'operador', ultimoAcceso: new Date(Date.now() - 3600000) },
   })
   const op2 = await prisma.usuario.create({
-    data: { nombre: 'Laura Gomez', email: 'laura@flota.com', passwordHash: opHash, rol: 'operador', ultimoAcceso: new Date(Date.now() - 86400000) },
+    data: { authId: op2AuthId, nombre: 'Laura Gomez', email: 'laura@flota.com', rol: 'operador', ultimoAcceso: new Date(Date.now() - 86400000) },
   })
   await prisma.usuario.create({
-    data: { nombre: 'Juan Perez', email: 'juan@flota.com', passwordHash: opHash, rol: 'visualizador', ultimoAcceso: new Date(Date.now() - 172800000) },
+    data: { authId: viewAuthId, nombre: 'Juan Perez', email: 'juan@flota.com', rol: 'visualizador', ultimoAcceso: new Date(Date.now() - 172800000) },
   })
 
   const hoy = new Date()
   const d = (offsetDays: number) => {
-    const d = new Date(hoy)
-    d.setDate(d.getDate() + offsetDays)
-    return d
+    const dt = new Date(hoy)
+    dt.setDate(dt.getDate() + offsetDays)
+    return dt
   }
 
   const vehiculos = await Promise.all([
@@ -98,7 +126,7 @@ async function main() {
     prisma.registroActividad.create({ data: { usuarioId: admin.id, accion: 'CREAR_VEHICULO', detalle: 'Vehículo agregado: Fiat Pulse HI345JK', entidad: 'Vehiculo', entidadId: vehiculos[14].id } }),
   ])
 
-  console.log('✅ Seed completado: 24 vehículos, 12 reservas, 3 alertas, 4 usuarios')
+  console.log('✅ Seed completado: 24 vehículos, 12 reservas, 3 alertas, 4 usuarios en Supabase Auth + PostgreSQL')
 }
 
 main()
