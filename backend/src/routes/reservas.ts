@@ -45,18 +45,35 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
 router.put('/:id', async (req: AuthRequest, res: Response) => {
   const id = Number(req.params.id)
-  const { clienteNombre, clienteEmail, clienteTel, fechaInicio, fechaFin, estado, notas } = req.body
+  const { vehiculoId, clienteNombre, clienteEmail, clienteTel, fechaInicio, fechaFin, estado, notas } = req.body
+
+  const prev = await prisma.reserva.findUnique({ where: { id } })
+  if (!prev) { res.status(404).json({ error: 'Reserva no encontrada' }); return }
+
+  const newVehiculoId = vehiculoId ? Number(vehiculoId) : prev.vehiculoId
+
   const r = await prisma.reserva.update({
     where: { id },
-    data: { clienteNombre, clienteEmail, clienteTel, fechaInicio: fechaInicio ? new Date(fechaInicio) : undefined, fechaFin: fechaFin ? new Date(fechaFin) : undefined, estado, notas },
+    data: { vehiculoId: newVehiculoId, clienteNombre, clienteEmail, clienteTel, fechaInicio: fechaInicio ? new Date(fechaInicio) : undefined, fechaFin: fechaFin ? new Date(fechaFin) : undefined, estado, notas },
     include: { vehiculo: true },
   })
+
+  // When the vehicle changes, update estado of both vehicles (only if reservation is active)
+  if (newVehiculoId !== prev.vehiculoId && prev.estado === 'activa') {
+    const otraActivaOld = await prisma.reserva.findFirst({ where: { vehiculoId: prev.vehiculoId, estado: 'activa', id: { not: id } } })
+    if (!otraActivaOld) {
+      await prisma.vehiculo.update({ where: { id: prev.vehiculoId }, data: { estado: 'disponible' } })
+    }
+    await prisma.vehiculo.update({ where: { id: newVehiculoId }, data: { estado: 'reservado' } })
+  }
+
   if (estado === 'finalizada' || estado === 'cancelada') {
     const otraActiva = await prisma.reserva.findFirst({ where: { vehiculoId: r.vehiculoId, estado: 'activa' } })
     if (!otraActiva) {
       await prisma.vehiculo.update({ where: { id: r.vehiculoId }, data: { estado: 'disponible' } })
     }
   }
+
   await prisma.registroActividad.create({ data: { usuarioId: req.userId, accion: 'MODIFICAR_RESERVA', detalle: `Reserva actualizada: ${r.vehiculo.patente} - ${r.clienteNombre}`, entidad: 'Reserva', entidadId: r.id } })
   res.json(r)
 })

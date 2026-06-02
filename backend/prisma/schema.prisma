@@ -66,14 +66,16 @@ model Alerta {
 }
 
 model ConfigAlerta {
-  id            Int      @id @default(autoincrement())
-  nombre        String
-  tipo          String   // vencimiento | mantenimiento | devolucion | cambio_estado
-  frecuencia    String   // diaria | semanal | inmediata
-  canal         String   @default("email") // email | sistema
-  destinatarios String   // JSON array de emails serializado
-  activa        Boolean  @default(true)
-  creadoEn      DateTime @default(now())
+  id                   Int      @id @default(autoincrement())
+  nombre               String
+  tipo                 String
+  frecuencia           String
+  horaEnvio            String?
+  canal                String   @default("email")
+  destinatarios        String   // JSON array de emails serializado
+  mensajePersonalizado String?
+  activa               Boolean  @default(true)
+  creadoEn             DateTime @default(now())
 }
 
 model RegistroActividad {
