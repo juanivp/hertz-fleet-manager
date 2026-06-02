@@ -29,4 +29,15 @@ app.use('/api/reportes', reportesRouter)
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
 
+app.get('/api/debug-auth', (req, res) => {
+  const header = req.headers.authorization
+  const jwtSecret = process.env.SUPABASE_JWT_SECRET ?? ''
+  res.json({
+    hasAuthHeader: !!header,
+    tokenPrefix: header ? header.slice(0, 20) + '...' : null,
+    jwtSecretLength: jwtSecret.length,
+    jwtSecretFirst4: jwtSecret.slice(0, 4),
+  })
+})
+
 app.listen(PORT, () => console.log(`Backend corriendo en http://localhost:${PORT}`))
