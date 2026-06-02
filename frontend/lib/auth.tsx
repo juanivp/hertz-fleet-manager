@@ -50,8 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function login(email: string, password: string) {
     const { data: authData, error } = await supabase.auth.signInWithPassword({ email, password })
+    console.log('[login] error:', error?.message ?? null)
+    console.log('[login] session:', authData.session ? 'present' : 'null')
+    console.log('[login] token prefix:', authData.session?.access_token?.slice(0, 30) ?? 'none')
     if (error) throw error
-    // Pass token directly — avoids relying on getSession() in the axios interceptor
     const { data } = await api.get('/auth/me', {
       headers: { Authorization: `Bearer ${authData.session!.access_token}` },
     })
