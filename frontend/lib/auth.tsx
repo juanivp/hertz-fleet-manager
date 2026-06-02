@@ -27,11 +27,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter()
 
   useEffect(() => {
-    // Restore session on mount
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session) {
+      if (session?.access_token) {
         try {
-          const { data } = await api.get('/auth/me')
+          const { data } = await api.get('/auth/me', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          })
           setUsuario(data)
         } catch {
           setUsuario(null)
@@ -40,7 +41,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false)
     })
 
-    // Keep in sync with Supabase auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') setUsuario(null)
     })
@@ -49,9 +49,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   async function login(email: string, password: string) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data: authData, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
-    const { data } = await api.get('/auth/me')
+    // Pass token directly — avoids relying on getSession() in the axios interceptor
+    const { data } = await api.get('/auth/me', {
+      headers: { Authorization: `Bearer ${authData.session!.access_token}` },
+    })
     setUsuario(data)
     router.push('/dashboard')
   }
